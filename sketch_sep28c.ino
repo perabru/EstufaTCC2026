@@ -1,17 +1,42 @@
+// ============================================================
+// ESP32 - ESTUFA / IRRIGACAO COM HIVEMQ
+// ============================================================
+//
+// Sensores:
+// - DHT11: temperatura e umidade do ar
+// - Sensor de umidade do solo FC-28
+//
+// Atuador:
+// - Rele 5V
+// - Bomba 12V
+//
+// MQTT:
+// - HiveMQ Cloud
+//
+// ------------------------------------------------------------
+// PINAGEM
+//
+// FC-28 AO  -> GPIO 34
+// DHT11     -> GPIO 26
+// Rele IN   -> GPIO 23
+//
+// ============================================================
+
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
+#include <DHT.h>
 
-// =====================================================
-// WIFI
-// =====================================================
+// ============================================================
+// 1. WIFI
+// ============================================================
 
-const char* WIFI_SSID = "NOME_DA_SUA_REDE";
-const char* WIFI_SENHA = "SENHA_DA_SUA_REDE";
+const char* WIFI_SSID  = "SUA_REDE_WIFI";
+const char* WIFI_SENHA = "SUA_SENHA_WIFI";
 
-// =====================================================
-// HIVEMQ CLOUD
-// =====================================================
+// ============================================================
+// 2. HIVEMQ CLOUD
+// ============================================================
 
 const char* MQTT_SERVIDOR =
   "d5010d2de7ff4182bd09c7fde4c243e5.s1.eu.hivemq.cloud";
@@ -19,19 +44,82 @@ const char* MQTT_SERVIDOR =
 const int MQTT_PORTA = 8883;
 
 const char* MQTT_USUARIO = "thalita";
-const char* MQTT_SENHA = "123456789";
+const char* MQTT_SENHA   = "123456789";
 
-// =====================================================
-// TOPICOS MQTT
-// =====================================================
+// ============================================================
+// 3. PINAGEM
+// ============================================================
 
-const char* TOPICO_COMANDO =
+#define PINO_SOLO 34
+#define PINO_DHT 26
+#define PINO_RELE 23
+
+#define TIPO_DHT DHT11
+
+// ============================================================
+// 4. RELE
+// ============================================================
+
+// A maioria dos modulos de rele trabalha em LOW.
+//
+// LOW  = ligado
+// HIGH = desligado
+
+#define RELE_LIGADO LOW
+#define RELE_DESLIGADO HIGH
+
+bool bombaLigada = false;
+
+// ============================================================
+// 5. SENSOR DHT
+// ============================================================
+
+DHT dht(PINO_DHT, TIPO_DHT);
+
+// ============================================================
+// 6. CALIBRACAO SENSOR DE SOLO
+// ============================================================
+//
+// AJUSTE estes valores de acordo com o seu sensor.
+//
+// Exemplo:
+// Seco    = 3500
+// Molhado = 1300
+//
+// Veja a leitura no Monitor Serial para calibrar.
+
+int VALOR_SOLO_SECO = 3500;
+int VALOR_SOLO_MOLHADO = 1300;
+
+// ============================================================
+// 7. TOPICOS MQTT
+// ============================================================
+
+// ---------- Sensores ----------
+
+const char* TOPICO_TEMPERATURA =
+  "estufa/sensor/temperatura";
+
+const char* TOPICO_UMIDADE_AR =
+  "estufa/sensor/umidade_ar";
+
+const char* TOPICO_UMIDADE_SOLO =
+  "estufa/sensor/umidade_solo";
+
+const char* TOPICO_SOLO_ADC =
+  "estufa/sensor/solo_adc";
+
+// ---------- Bomba ----------
+
+const char* TOPICO_BOMBA_COMANDO =
   "estufa/bomba/comando";
 
-const char* TOPICO_STATUS_BOMBA =
+const char* TOPICO_BOMBA_STATUS =
   "estufa/bomba/status";
 
-const char* TOPICO_STATUS_ESP =
+// ---------- ESP32 ----------
+
+const char* TOPICO_ESP_STATUS =
   "estufa/esp/status";
 
 const char* TOPICO_RSSI =
@@ -40,36 +128,30 @@ const char* TOPICO_RSSI =
 const char* TOPICO_UPTIME =
   "estufa/esp/uptime";
 
-// =====================================================
-// RELE
-// =====================================================
+// ---------- Dados completos ----------
 
-#define PINO_RELE 23
+const char* TOPICO_DADOS =
+  "estufa/dados";
 
-// Seu módulo normalmente é acionado em LOW
-#define RELE_LIGADO LOW
-#define RELE_DESLIGADO HIGH
-
-bool bombaLigada = false;
-
-// =====================================================
-// MQTT
-// =====================================================
+// ============================================================
+// 8. MQTT
+// ============================================================
 
 WiFiClientSecure wifiClient;
 PubSubClient mqtt(wifiClient);
 
-// =====================================================
-// TEMPORIZADOR
-// =====================================================
+// ============================================================
+// 9. TEMPORIZADORES
+// ============================================================
 
 unsigned long ultimoEnvio = 0;
 
-const unsigned long INTERVALO_ENVIO = 10000;
+// Envia dados a cada 5 segundos
+const unsigned long INTERVALO_ENVIO = 5000;
 
-// =====================================================
-// LIGAR BOMBA
-// =====================================================
+// ============================================================
+// 10. LIGAR BOMBA
+// ============================================================
 
 void ligarBomba() {
 
@@ -78,20 +160,23 @@ void ligarBomba() {
   bombaLigada = true;
 
   Serial.println();
-  Serial.println("==========================");
-  Serial.println("BOMBA LIGADA");
-  Serial.println("==========================");
+  Serial.println("==============================");
+  Serial.println(">>> BOMBA LIGADA");
+  Serial.println("==============================");
 
-  mqtt.publish(
-    TOPICO_STATUS_BOMBA,
-    "LIGADA",
-    true
-  );
+  if (mqtt.connected()) {
+
+    mqtt.publish(
+      TOPICO_BOMBA_STATUS,
+      "LIGADA",
+      true
+    );
+  }
 }
 
-// =====================================================
-// DESLIGAR BOMBA
-// =====================================================
+// ============================================================
+// 11. DESLIGAR BOMBA
+// ============================================================
 
 void desligarBomba() {
 
@@ -100,20 +185,85 @@ void desligarBomba() {
   bombaLigada = false;
 
   Serial.println();
-  Serial.println("==========================");
-  Serial.println("BOMBA DESLIGADA");
-  Serial.println("==========================");
+  Serial.println("==============================");
+  Serial.println(">>> BOMBA DESLIGADA");
+  Serial.println("==============================");
 
-  mqtt.publish(
-    TOPICO_STATUS_BOMBA,
-    "DESLIGADA",
-    true
-  );
+  if (mqtt.connected()) {
+
+    mqtt.publish(
+      TOPICO_BOMBA_STATUS,
+      "DESLIGADA",
+      true
+    );
+  }
 }
 
-// =====================================================
-// RECEBE COMANDO MQTT
-// =====================================================
+// ============================================================
+// 12. LEITURA DO SOLO
+// ============================================================
+
+int lerSoloADC() {
+
+  long soma = 0;
+
+  const int quantidadeLeituras = 10;
+
+  for (int i = 0; i < quantidadeLeituras; i++) {
+
+    soma += analogRead(PINO_SOLO);
+
+    delay(5);
+  }
+
+  return soma / quantidadeLeituras;
+}
+
+// ============================================================
+// 13. CONVERTER SOLO PARA PORCENTAGEM
+// ============================================================
+
+int calcularUmidadeSolo(int valorADC) {
+
+  int porcentagem = map(
+    valorADC,
+    VALOR_SOLO_SECO,
+    VALOR_SOLO_MOLHADO,
+    0,
+    100
+  );
+
+  porcentagem = constrain(
+    porcentagem,
+    0,
+    100
+  );
+
+  return porcentagem;
+}
+
+// ============================================================
+// 14. CALLBACK MQTT
+// ============================================================
+//
+// Esta funcao recebe mensagens enviadas pelo celular.
+//
+// Topico:
+//
+// estufa/bomba/comando
+//
+// Mensagens aceitas:
+//
+// LIGAR
+// DESLIGAR
+//
+// Tambem:
+// ON
+// OFF
+// 1
+// 0
+//
+// ============================================================
 
 void callback(
   char* topic,
@@ -132,19 +282,21 @@ void callback(
   mensagem.toUpperCase();
 
   Serial.println();
-  Serial.print("Topico recebido: ");
+  Serial.println("========== MQTT RECEBIDO ==========");
+
+  Serial.print("Topico: ");
   Serial.println(topic);
 
   Serial.print("Mensagem: ");
   Serial.println(mensagem);
 
-  // ===================================================
-  // CONTROLE DA BOMBA
-  // ===================================================
+  Serial.println("===================================");
 
-  if (String(topic) == TOPICO_COMANDO) {
+  // ==========================================================
+  // COMANDO DA BOMBA
+  // ==========================================================
 
-    // Aceita vários comandos
+  if (String(topic) == TOPICO_BOMBA_COMANDO) {
 
     if (
       mensagem == "LIGAR" ||
@@ -166,19 +318,27 @@ void callback(
 
     else {
 
-      Serial.println("Comando desconhecido.");
+      Serial.println("Comando MQTT desconhecido.");
     }
   }
 }
 
-// =====================================================
-// CONECTAR WIFI
-// =====================================================
+// ============================================================
+// 15. CONECTAR AO WIFI
+// ============================================================
 
 void conectarWiFi() {
 
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+
   Serial.println();
-  Serial.print("Conectando ao WiFi: ");
+  Serial.println("==============================");
+  Serial.println("CONECTANDO AO WIFI");
+  Serial.println("==============================");
+
+  Serial.print("Rede: ");
   Serial.println(WIFI_SSID);
 
   WiFi.mode(WIFI_STA);
@@ -188,145 +348,187 @@ void conectarWiFi() {
     WIFI_SENHA
   );
 
-  while (WiFi.status() != WL_CONNECTED) {
+  int tentativas = 0;
+
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    tentativas < 40
+  ) {
 
     delay(500);
 
     Serial.print(".");
+
+    tentativas++;
   }
 
   Serial.println();
-  Serial.println("==========================");
-  Serial.println("WIFI CONECTADO");
-  Serial.println("==========================");
 
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
+  if (WiFi.status() == WL_CONNECTED) {
 
-  Serial.print("RSSI: ");
-  Serial.println(WiFi.RSSI());
+    Serial.println();
+    Serial.println("WIFI CONECTADO!");
+
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+
+    Serial.print("RSSI: ");
+    Serial.print(WiFi.RSSI());
+    Serial.println(" dBm");
+  }
+
+  else {
+
+    Serial.println("Falha ao conectar no WiFi.");
+  }
 }
 
-// =====================================================
-// CONECTAR MQTT
-// =====================================================
+// ============================================================
+// 16. CONECTAR AO HIVEMQ
+// ============================================================
 
 void conectarMQTT() {
 
-  while (!mqtt.connected()) {
+  if (mqtt.connected()) {
+    return;
+  }
 
-    Serial.println();
-    Serial.println("Conectando ao HiveMQ...");
+  Serial.println();
+  Serial.println("==============================");
+  Serial.println("CONECTANDO AO HIVEMQ");
+  Serial.println("==============================");
 
-    // ID único da ESP32
-    String clienteID = "ESP32-ESTUFA-";
+  String clienteID = "ESP32-ESTUFA-";
 
-    clienteID += String(
-      (uint32_t)ESP.getEfuseMac(),
-      HEX
+  clienteID += String(
+    (uint32_t)(ESP.getEfuseMac() & 0xFFFFFFFF),
+    HEX
+  );
+
+  Serial.print("Cliente MQTT: ");
+  Serial.println(clienteID);
+
+  bool conectado = mqtt.connect(
+    clienteID.c_str(),
+    MQTT_USUARIO,
+    MQTT_SENHA,
+
+    // Last Will Topic
+    TOPICO_ESP_STATUS,
+
+    // QoS
+    1,
+
+    // Retain
+    true,
+
+    // Mensagem caso caia
+    "OFFLINE"
+  );
+
+  if (conectado) {
+
+    Serial.println("HiveMQ conectado!");
+
+    // ESP online
+    mqtt.publish(
+      TOPICO_ESP_STATUS,
+      "ONLINE",
+      true
     );
 
-    // Last Will
-    bool conectado = mqtt.connect(
-      clienteID.c_str(),
-      MQTT_USUARIO,
-      MQTT_SENHA,
-      TOPICO_STATUS_ESP,
-      1,
-      true,
-      "OFFLINE"
+    // Estado atual da bomba
+    mqtt.publish(
+      TOPICO_BOMBA_STATUS,
+      bombaLigada ? "LIGADA" : "DESLIGADA",
+      true
     );
 
-    if (conectado) {
+    // Recebe comandos
+    mqtt.subscribe(
+      TOPICO_BOMBA_COMANDO
+    );
 
-      Serial.println("==========================");
-      Serial.println("HIVEMQ CONECTADO");
-      Serial.println("==========================");
+    Serial.print("Inscrito em: ");
+    Serial.println(TOPICO_BOMBA_COMANDO);
+  }
 
-      // ESP está online
-      mqtt.publish(
-        TOPICO_STATUS_ESP,
-        "ONLINE",
-        true
-      );
+  else {
 
-      // Estado atual da bomba
-      mqtt.publish(
-        TOPICO_STATUS_BOMBA,
-        bombaLigada ? "LIGADA" : "DESLIGADA",
-        true
-      );
-
-      // Assina comando da bomba
-      mqtt.subscribe(
-        TOPICO_COMANDO
-      );
-
-      Serial.print("Inscrito em: ");
-      Serial.println(TOPICO_COMANDO);
-    }
-
-    else {
-
-      Serial.print("Erro MQTT: ");
-      Serial.println(mqtt.state());
-
-      Serial.println(
-        "Tentando novamente em 5 segundos..."
-      );
-
-      delay(5000);
-    }
+    Serial.print("Erro MQTT: ");
+    Serial.println(mqtt.state());
   }
 }
 
-// =====================================================
-// ENVIAR DADOS
-// =====================================================
+// ============================================================
+// 17. ENVIAR DADOS PARA O HIVEMQ
+// ============================================================
 
 void enviarDados() {
 
-  // ===================================================
-  // RSSI
-  // ===================================================
+  // ----------------------------------------------------------
+  // DHT11
+  // ----------------------------------------------------------
 
-  String rssi =
-    String(WiFi.RSSI());
+  float temperatura = dht.readTemperature();
+  float umidadeAr = dht.readHumidity();
 
-  mqtt.publish(
-    TOPICO_RSSI,
-    rssi.c_str(),
-    true
-  );
+  // ----------------------------------------------------------
+  // SOLO
+  // ----------------------------------------------------------
 
-  // ===================================================
-  // UPTIME
-  // ===================================================
+  int soloADC = lerSoloADC();
 
-  unsigned long segundos =
-    millis() / 1000;
+  int umidadeSolo =
+    calcularUmidadeSolo(soloADC);
 
-  String uptime =
-    String(segundos);
-
-  mqtt.publish(
-    TOPICO_UPTIME,
-    uptime.c_str(),
-    true
-  );
-
-  // ===================================================
-  // STATUS DA BOMBA
-  // ===================================================
-
-  mqtt.publish(
-    TOPICO_STATUS_BOMBA,
-    bombaLigada ? "LIGADA" : "DESLIGADA",
-    true
-  );
+  // ----------------------------------------------------------
+  // SERIAL
+  // ----------------------------------------------------------
 
   Serial.println();
-  Serial.println("----- DADOS MQTT -----");
+  Serial.println("========================================");
+  Serial.println("            LEITURA SENSORES");
+  Serial.println("========================================");
+
+  // Temperatura
+
+  if (!isnan(temperatura)) {
+
+    Serial.print("Temperatura: ");
+    Serial.print(temperatura, 1);
+    Serial.println(" C");
+  }
+
+  else {
+
+    Serial.println("Temperatura: ERRO DHT11");
+  }
+
+  // Umidade do ar
+
+  if (!isnan(umidadeAr)) {
+
+    Serial.print("Umidade do ar: ");
+    Serial.print(umidadeAr, 1);
+    Serial.println(" %");
+  }
+
+  else {
+
+    Serial.println("Umidade do ar: ERRO DHT11");
+  }
+
+  // Solo
+
+  Serial.print("Solo ADC: ");
+  Serial.println(soloADC);
+
+  Serial.print("Umidade do solo: ");
+  Serial.print(umidadeSolo);
+  Serial.println(" %");
+
+  // Bomba
 
   Serial.print("Bomba: ");
 
@@ -334,25 +536,238 @@ void enviarDados() {
 
     Serial.println("LIGADA");
 
-  } else {
+  }
+
+  else {
 
     Serial.println("DESLIGADA");
   }
 
-  Serial.print("RSSI: ");
+  // WiFi
+
+  Serial.print("WiFi RSSI: ");
   Serial.print(WiFi.RSSI());
   Serial.println(" dBm");
 
-  Serial.print("Uptime: ");
-  Serial.print(segundos);
-  Serial.println(" segundos");
+  Serial.println("========================================");
 
-  Serial.println("----------------------");
+  // ==========================================================
+  // PUBLICAR MQTT
+  // ==========================================================
+
+  if (!mqtt.connected()) {
+
+    Serial.println("MQTT desconectado.");
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // TEMPERATURA
+  // ----------------------------------------------------------
+
+  if (!isnan(temperatura)) {
+
+    char tempString[10];
+
+    dtostrf(
+      temperatura,
+      1,
+      1,
+      tempString
+    );
+
+    mqtt.publish(
+      TOPICO_TEMPERATURA,
+      tempString,
+      true
+    );
+  }
+
+  // ----------------------------------------------------------
+  // UMIDADE DO AR
+  // ----------------------------------------------------------
+
+  if (!isnan(umidadeAr)) {
+
+    char umidadeString[10];
+
+    dtostrf(
+      umidadeAr,
+      1,
+      1,
+      umidadeString
+    );
+
+    mqtt.publish(
+      TOPICO_UMIDADE_AR,
+      umidadeString,
+      true
+    );
+  }
+
+  // ----------------------------------------------------------
+  // UMIDADE DO SOLO
+  // ----------------------------------------------------------
+
+  String soloString =
+    String(umidadeSolo);
+
+  mqtt.publish(
+    TOPICO_UMIDADE_SOLO,
+    soloString.c_str(),
+    true
+  );
+
+  // ----------------------------------------------------------
+  // ADC SOLO
+  // ----------------------------------------------------------
+
+  String adcString =
+    String(soloADC);
+
+  mqtt.publish(
+    TOPICO_SOLO_ADC,
+    adcString.c_str(),
+    true
+  );
+
+  // ----------------------------------------------------------
+  // BOMBA
+  // ----------------------------------------------------------
+
+  mqtt.publish(
+    TOPICO_BOMBA_STATUS,
+    bombaLigada ? "LIGADA" : "DESLIGADA",
+    true
+  );
+
+  // ----------------------------------------------------------
+  // RSSI
+  // ----------------------------------------------------------
+
+  String rssiString =
+    String(WiFi.RSSI());
+
+  mqtt.publish(
+    TOPICO_RSSI,
+    rssiString.c_str(),
+    true
+  );
+
+  // ----------------------------------------------------------
+  // UPTIME
+  // ----------------------------------------------------------
+
+  unsigned long uptime =
+    millis() / 1000;
+
+  String uptimeString =
+    String(uptime);
+
+  mqtt.publish(
+    TOPICO_UPTIME,
+    uptimeString.c_str(),
+    true
+  );
+
+  // ==========================================================
+  // JSON COM TODOS OS DADOS
+  // ==========================================================
+
+  String json = "{";
+
+  // Temperatura
+
+  json += "\"temperatura\":";
+
+  if (!isnan(temperatura)) {
+
+    json += String(temperatura, 1);
+
+  }
+
+  else {
+
+    json += "null";
+  }
+
+  // Umidade ar
+
+  json += ",\"umidade_ar\":";
+
+  if (!isnan(umidadeAr)) {
+
+    json += String(umidadeAr, 1);
+
+  }
+
+  else {
+
+    json += "null";
+  }
+
+  // Solo %
+
+  json += ",\"umidade_solo\":";
+  json += String(umidadeSolo);
+
+  // Solo ADC
+
+  json += ",\"solo_adc\":";
+  json += String(soloADC);
+
+  // Bomba
+
+  json += ",\"bomba\":\"";
+
+  if (bombaLigada) {
+
+    json += "LIGADA";
+
+  }
+
+  else {
+
+    json += "DESLIGADA";
+  }
+
+  json += "\"";
+
+  // RSSI
+
+  json += ",\"rssi\":";
+  json += String(WiFi.RSSI());
+
+  // Uptime
+
+  json += ",\"uptime\":";
+  json += String(uptime);
+
+  json += "}";
+
+  // ----------------------------------------------------------
+  // PUBLICAR JSON
+  // ----------------------------------------------------------
+
+  mqtt.publish(
+    TOPICO_DADOS,
+    json.c_str(),
+    true
+  );
+
+  Serial.println();
+  Serial.println("JSON enviado:");
+
+  Serial.println(json);
+
+  Serial.println();
+  Serial.println("Dados enviados para o HiveMQ.");
 }
 
-// =====================================================
-// SETUP
-// =====================================================
+// ============================================================
+// 18. SETUP
+// ============================================================
 
 void setup() {
 
@@ -360,17 +775,21 @@ void setup() {
 
   delay(1000);
 
-  // ===================================================
+  Serial.println();
+  Serial.println("========================================");
+  Serial.println("       ESTUFA ESP32 + HIVEMQ");
+  Serial.println("========================================");
+
+  // ==========================================================
   // RELE
-  // ===================================================
+  // ==========================================================
 
   pinMode(
     PINO_RELE,
     OUTPUT
   );
 
-  // Segurança:
-  // inicia sempre com a bomba desligada
+  // Comeca obrigatoriamente desligada
 
   digitalWrite(
     PINO_RELE,
@@ -379,27 +798,41 @@ void setup() {
 
   bombaLigada = false;
 
-  // ===================================================
+  // ==========================================================
+  // SENSOR SOLO
+  // ==========================================================
+
+  pinMode(
+    PINO_SOLO,
+    INPUT
+  );
+
+  analogReadResolution(12);
+
+  // ==========================================================
+  // DHT
+  // ==========================================================
+
+  dht.begin();
+
+  // ==========================================================
   // WIFI
-  // ===================================================
+  // ==========================================================
 
   conectarWiFi();
 
-  // ===================================================
+  // ==========================================================
   // TLS
-  // ===================================================
-
-  /*
-     Para facilitar o primeiro teste,
-     utiliza conexão TLS sem validar
-     o certificado do servidor.
-  */
+  // ==========================================================
+  //
+  // Utilizado para simplificar o teste com HiveMQ Cloud.
+  //
 
   wifiClient.setInsecure();
 
-  // ===================================================
+  // ==========================================================
   // MQTT
-  // ===================================================
+  // ==========================================================
 
   mqtt.setServer(
     MQTT_SERVIDOR,
@@ -410,20 +843,23 @@ void setup() {
     callback
   );
 
-  mqtt.setBufferSize(512);
+  mqtt.setBufferSize(1024);
 
   conectarMQTT();
+
+  Serial.println();
+  Serial.println("Sistema pronto.");
 }
 
-// =====================================================
-// LOOP
-// =====================================================
+// ============================================================
+// 19. LOOP
+// ============================================================
 
 void loop() {
 
-  // ===================================================
-  // VERIFICA WIFI
-  // ===================================================
+  // ==========================================================
+  // WIFI
+  // ==========================================================
 
   if (
     WiFi.status() != WL_CONNECTED
@@ -432,11 +868,12 @@ void loop() {
     conectarWiFi();
   }
 
-  // ===================================================
-  // VERIFICA MQTT
-  // ===================================================
+  // ==========================================================
+  // MQTT
+  // ==========================================================
 
   if (
+    WiFi.status() == WL_CONNECTED &&
     !mqtt.connected()
   ) {
 
@@ -445,9 +882,9 @@ void loop() {
 
   mqtt.loop();
 
-  // ===================================================
-  // ENVIA DADOS A CADA 10 SEGUNDOS
-  // ===================================================
+  // ==========================================================
+  // ENVIO DOS SENSORES
+  // ==========================================================
 
   if (
     millis() - ultimoEnvio
@@ -458,4 +895,6 @@ void loop() {
 
     enviarDados();
   }
+
+  delay(10);
 }
